@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?> 
+<java version="1.6.0_13" class="java.beans.XMLDecoder"> 
+ <object class="org.opensolaris.opengrok.configuration.Configuration"> 
+  <void property="ctags"> 
+   <string>/srv/source.debian.net/bin/safe-exctags</string> 
+  </void> 
+  <void property="dataRoot"> 
+   <string>/srv/source.debian.net/index</string> 
+  </void> 
+  <void property="generateHtml"> 
+   <boolean>false</boolean> 
+  </void> 
+  <void property="sourceRoot"> 
+   <string>/srv/source.debian.net/source/pool</string> 
+  </void> 
+ </object> 
+</java> 

@@ -1,0 +1,12 @@
+diff -ur opengrok-0.7-src-orig/src/org/opensolaris/opengrok/index/IndexDatabase.java opengrok-0.7-src/src/org/opensolaris/opengrok/index/IndexDatabase.java
+--- opengrok-0.7-src-orig/src/org/opensolaris/opengrok/index/IndexDatabase.java	2008-10-17 12:15:23.000000000 +0200
++++ opengrok-0.7-src/src/org/opensolaris/opengrok/index/IndexDatabase.java	2009-05-29 01:24:04.000000000 +0200
+@@ -576,7 +576,7 @@
+                     }
+                     try {
+                         addFile(file, path);
+-                    } catch (Exception e) {
++                    } catch (Throwable e) {
+                         log.log(Level.WARNING,
+                                 "Failed to add file " + file.getAbsolutePath(),
+                                 e);

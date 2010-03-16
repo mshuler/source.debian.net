@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+run () {
+  cd /srv/source.debian.net
+  bin/downloaddebian
+  java -Djava.util.logging.config.file=etc/opengrok-logging.properties -server -jar opengrok/opengrok.jar -R etc/opengrok-config.xml
+}
+
+time run

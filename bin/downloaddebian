@@ -1,0 +1,206 @@
+#!/usr/bin/env ruby
+$:.unshift 'dpkg-ruby/lib'
+require 'debian' #libdpkg-ruby
+require 'tmpdir'
+require 'tempfile'
+require 'digest/md5'
+require 'fileutils'
+require 'thread'
+require 'thwait'
+begin; require 'rubygems'; rescue LoadError; end
+require 'sqlite3'
+
+$HOME_DIR = '/srv/source.debian.net'
+$TMP_DIR  = $HOME_DIR + '/tmp'
+$SRC_DIR  = $HOME_DIR + '/source'
+$DB_FILE  = $HOME_DIR + '/etc/downloaddebian.sqlite'
+
+$MIRROR = 'http://ftp.be.debian.org/debian'
+$DISTS  = ['sid/main', 'sid/contrib']
+
+$SOURCES_LISTS =
+  $DISTS.map {|d| "#{$MIRROR}/dists/#{d}/source/Sources.gz"}
+
+$DPKG_SOURCE = ['dpkg-source', '-x', '--no-copy']
+
+$MAX_THREADS = 8
+
+$BLACKLIST = []
+
+# Work around a bug in Debian::Sources
+class Sources < Debian::Sources
+  def initialize(*args)
+    super(*args)
+    @file ||= []
+  end
+end
+
+
+module Installed
+  @db = nil
+
+  def Installed._db
+    unless @db
+      @db = SQLite3::Database.new($DB_FILE)
+      sql = 'CREATE TABLE IF NOT EXISTS "installed" ("pkg" PRIMARY KEY, "version", "directory")'
+      @db.execute_batch(sql)
+    end
+    return @db
+  end
+
+  def Installed.get
+    inst = {}
+    _db.execute('SELECT "pkg", "version", "directory" FROM "installed"') do |row|
+      inst[row[0]] = { 'Version' => row[1], 'Directory' => row[2] }
+    end
+    return inst
+  end
+
+  def Installed.delete(pkg)
+    _db.execute('DELETE FROM "installed" WHERE "pkg" = ?', pkg)  #'
+  end
+
+  def Installed.add(pkg, meta)
+    _db.execute('INSERT OR REPLACE INTO "installed" ("pkg", "version", "directory") VALUES (?, ?, ?)',
+                pkg, meta['Version'], meta['Directory'])
+  end
+end
+
+class DownloadFailedException < Exception
+end
+
+class DpkgSourceFailedException < Exception
+end
+
+class DeleteSource
+  def initialize(pkg, old_dir)
+    @pkg = pkg
+    @old_dir = $SRC_DIR + '/' + old_dir
+  end
+  def run
+    Dir.mktmpdir(@pkg, $TMP_DIR) do |dir|
+      File.rename(@old_dir, "#{dir}/old")
+      Installed.delete(@pkg)
+    end
+  end
+end
+
+class InstallSource
+  def initialize(pkg, dsc, old_dir = nil)
+    @pkg = pkg
+    @dsc = dsc
+    @old_dir = $SRC_DIR + '/' + old_dir if old_dir
+    @dest_dir = $SRC_DIR + '/' + @dsc['Directory']
+  end
+  def run
+    Dir.mktmpdir("#{@pkg}-", $TMP_DIR) do |dir|
+      FileUtils.mkpath(File.dirname(@dest_dir))
+      dget(@dsc, dir, "#{dir}/new")
+      system('chmod', '-R', 'a+rX,o-w', "#{dir}/new")
+      system('find', "#{dir}/new", '-name', '*.dpkg-old', '-delete')
+      File.rename(@dest_dir, "#{dir}/old") if File.exists? @dest_dir
+      File.rename(@old_dir, "#{dir}/old2") if @old_dir and File.exists? @old_dir
+      File.rename("#{dir}/new", @dest_dir)
+      Installed.add(@pkg,
+        { 'Directory' => @dsc['Directory'], 'Version' => @dsc['Version'] })
+    end
+  end
+  def dget(dsc, tmp_dir, out_dir)
+    dsc_file = nil
+    dsc['Files'].sub(/^\s+/, '').split(/\n/).each do |line|
+      (md5, size, name) = line.sub(/^\s+/, '').split(/\s+/)
+      url = "#{$MIRROR}/#{dsc['Directory']}/#{name}"
+      file = "#{tmp_dir}/#{name}"
+      system('curl', '--silent', '-o', file, url)
+      raise DownloadFailedException.new(url) unless
+        File.file?(file) and
+        File.size(file).to_s == size and
+        md5sum(file) == md5
+      dsc_file = file if file =~ /dsc$/
+    end
+    system(*($DPKG_SOURCE + [dsc_file, out_dir])) or
+      raise DpkgSourceFailedException.new(dsc_file)
+  end
+#  def md5sum(filename)
+#    md5 = Digest::MD5.new
+#    File.open(filename, 'rb') do |f|
+#      while x = f.read(16384)
+#        md5 << x
+#      end
+#    end
+#    return md5.hexdigest
+#  end
+  def md5sum(filename)
+    IO::popen("md5sum #{filename}") {|f| f.gets.split(' ')[0] }
+  end
+end
+
+def calculate_work(installed, available)
+  installed.each do |pkg,meta|
+    if not available.has_key? pkg
+      yield DeleteSource.new(pkg, meta['Directory'])
+    end
+  end
+  available.each_package do |dsc|
+    unless $BLACKLIST.include? dsc.source
+      if installed.has_key? dsc.source
+        if installed[dsc.source]['Version'] != dsc.version
+          yield InstallSource.new(dsc.source, dsc, installed[dsc.source]['Directory'])
+        end
+      else
+        yield InstallSource.new(dsc.source, dsc)
+      end
+    end
+  end
+end
+
+def work_thread(work)
+  Thread.new do
+    begin
+      work.run
+    rescue Exception => e
+      STDERR.puts([e] + e.backtrace + [''])
+    end
+  end
+end
+
+def run
+  available = Sources.new
+  $SOURCES_LISTS.each do |s|
+    if s =~ /:\/\//
+      system('curl', '--silent', '-o', "#{$TMP_DIR}/sources.gz", s) or
+        raise DownloadFailedException.new(s)
+      available.add(Sources.new("#{$TMP_DIR}/sources.gz"))
+    else
+      available.add(Sources.new(s))
+    end
+  end
+
+  Installed.get.each do |pkg,meta|
+    unless File.exists?($SRC_DIR + '/' + meta['Directory'])
+      Installed.delete(pkg)
+    end
+  end
+
+  th = ThreadsWait.new
+  calculate_work(Installed.get, available) do |work|
+    if th.threads.size >= $MAX_THREADS
+      th.next_wait
+    end
+    th.join_nowait(work_thread(work))
+  end
+  th.all_waits
+end
+
+def with_lock(dir, name)
+  f = Tempfile.new("#{name}-", dir)
+  File.link(f.path, "#{dir}/#{name}")
+  begin
+    File.unlink(f.path)
+    yield
+  ensure
+    File.unlink("#{dir}/#{name}")
+  end
+end
+
+with_lock($TMP_DIR, 'downloaddebian.lock') do run end

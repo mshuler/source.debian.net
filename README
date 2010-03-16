@@ -1,0 +1,36 @@
+Required software
+-----------------
+  ruby libdpkg-ruby libsqlite3-ruby curl exuberant-ctags
+
+Installation
+------------
+  Copy this directory tree to /srv/source.debian.net. Or else hunt for
+  all the hard-coded paths.
+
+  bin/downloaddebian is the script responsible for downloading and
+  extracting the packages. Edit the top of the script to select your
+  preferred mirror and the desired distributions.
+
+  Installing OpenGrok. I used OpenGrok 0.7. First, recompile it with
+  the patch described below. Edit the web.xml file to point to the
+  configuration file (.../etc/opengrok-config.xml). Then copy the
+  source.war file to Tomcat's webapp dir. The other binaries can be
+  installed wherever you want.
+
+  You'll have to configure Tomcat's security settings. See the
+  OpenGrok website.
+
+  Two caveats:
+
+  - If OpenGrok runs out of memory, it dies silently. Nothing is logged
+    in this case. This happened for me with a handful of files in the
+    archive, for example one of the gnuchess data files. In the src/
+    directory is a patch that catches the out-of-memory exception and
+    continues with the next file instead.
+
+  - Exuberant Ctags (used by OpenGrok when indexing) sometimes gets
+    stuck in an infinite loop. The safe-exctags program is a wrapper
+    which kills the process if it takes more than a couple of minutes.
+
+  bin/crontab is a script you can run whenever you want to refresh the
+  website.  Edit it to set the place where you've installed OpenGrok.
